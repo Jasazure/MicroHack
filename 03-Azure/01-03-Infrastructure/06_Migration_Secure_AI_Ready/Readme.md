@@ -72,7 +72,7 @@ With these pre-requisites in place, we can focus on building the differentiated 
 ## Challenges
 
 * [Challenge 1 - Prerequisites and landing zone preparation](challenges/challenge-01.md)  **<- Start here**
-* [Challenge 2 - titDiscover physical servers for the migrationle](challenges/challenge-02.md)
+* [Challenge 2 - Discover physical servers for the migration](challenges/challenge-02.md)
 * [Challenge 3 - Create a Business Case](challenges/challenge-03.md)
 * [Challenge 4 - Assess VMs for the migration](challenges/challenge-04.md)
 * [Challenge 5 - Migrate machines to Azure](challenges/challenge-05.md)
