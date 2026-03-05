@@ -275,7 +275,7 @@ Directory: `.github/`
 
 | Directory | Summary |
 |---|---|
-| `01-Identity and Access Management/` | Contains MicroHack scenarios focused on Azure Active Directory and identity management topics. |
+| `01-Identity and Access Management/` | Contains MicroHack scenarios focused on Microsoft Entra ID and identity management topics. |
 | `02-Security/` | Contains MicroHack scenarios for Azure security topics including Defender for Cloud and network security. |
 | `03-Azure/` | The main directory housing all Azure-focused MicroHacks across App Innovation, Data, Infrastructure (including the Sovereign Cloud, BCDR, Arc, Migration, Monitor, and Oracle sub-scenarios), and SAP. |
 | `04-Microsoft-365/` | Contains MicroHack scenarios related to Microsoft 365 services and administration. |
