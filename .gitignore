@@ -203,3 +203,5 @@ id_rsa.pub
 
 # Ignore ARM Parameter files
 *.parameters.json
+# Keep sovereign landing zone parameter files (no secrets — placeholder values only)
+!deployments/sovereign-baseline/*.parameters.json
