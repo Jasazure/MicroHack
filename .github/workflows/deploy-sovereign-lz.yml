@@ -1,0 +1,264 @@
+# Sovereign Cloud Platform Landing Zone - Deployment Pipeline
+#
+# Three-stage pipeline: validate -> what-if -> deploy
+# Uses OIDC federation for Azure authentication (no client secrets).
+# See REUSE_CATALOG.md for the full mapping of repository assets to
+# sovereign landing zone modules.
+
+name: Deploy Sovereign Landing Zone
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (dev or prod)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+      dry_run:
+        description: 'Dry run -- run validate and what-if only, skip deploy'
+        required: true
+        type: boolean
+        default: true
+
+# OIDC federation requires id-token: write.
+# pull-requests: write is needed to post what-if results as PR comments.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  DEPLOYMENT_LOCATION: westeurope
+  DEPLOYMENT_NAME: sovereign-lz-${{ github.run_number }}
+
+jobs:
+  # --------------------------------------------------------------------------
+  # VALIDATE -- compile, lint, and validate the Bicep template
+  # --------------------------------------------------------------------------
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Lint Bicep template
+        # Catches style and best-practice issues before compilation.
+        run: az bicep lint --file deployments/sovereign-baseline/main.bicep
+
+      - name: Compile Bicep to ARM template
+        run: |
+          mkdir -p dist
+          az bicep build \
+            --file deployments/sovereign-baseline/main.bicep \
+            --outfile dist/sovereign-lz.json
+
+      - name: Determine parameter file
+        id: params
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/${{ github.event.inputs.environment }}.parameters.json"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/prod.parameters.json"
+          else
+            PARAMS_FILE="deployments/sovereign-baseline/dev.parameters.json"
+          fi
+          echo "file=$PARAMS_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Validate deployment at subscription scope
+        run: |
+          az deployment sub validate \
+            --location "${{ env.DEPLOYMENT_LOCATION }}" \
+            --name "${{ env.DEPLOYMENT_NAME }}" \
+            --template-file dist/sovereign-lz.json \
+            --parameters @${{ steps.params.outputs.file }}
+
+      - name: Upload compiled template artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bicep-compiled
+          path: dist/
+
+  # --------------------------------------------------------------------------
+  # WHAT-IF -- preview changes without applying them
+  # --------------------------------------------------------------------------
+  what-if:
+    name: What-If Analysis
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download compiled template
+        uses: actions/download-artifact@v4
+        with:
+          name: bicep-compiled
+          path: dist/
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Determine parameter file
+        id: params
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/${{ github.event.inputs.environment }}.parameters.json"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/prod.parameters.json"
+          else
+            PARAMS_FILE="deployments/sovereign-baseline/dev.parameters.json"
+          fi
+          echo "file=$PARAMS_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Run what-if analysis
+        id: whatif
+        # What-if is informational; failures here must not block the pipeline.
+        continue-on-error: true
+        run: |
+          az deployment sub what-if \
+            --location "${{ env.DEPLOYMENT_LOCATION }}" \
+            --name "${{ env.DEPLOYMENT_NAME }}" \
+            --template-file dist/sovereign-lz.json \
+            --parameters @${{ steps.params.outputs.file }} \
+            > whatif-output.txt 2>&1 || true
+          cat whatif-output.txt
+
+      - name: Post what-if results as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let whatIfOutput = fs.readFileSync('whatif-output.txt', 'utf8');
+
+            // Truncate to stay within the GitHub comment size limit.
+            const maxLen = 60000;
+            if (whatIfOutput.length > maxLen) {
+              whatIfOutput = whatIfOutput.substring(0, maxLen) + '\n... (truncated)';
+            }
+
+            const body = [
+              '### Sovereign Landing Zone What-If Results',
+              '',
+              '```',
+              whatIfOutput,
+              '```',
+              '',
+              '*This comment was automatically generated by the deploy-sovereign-lz workflow.*'
+            ].join('\n');
+
+            // Remove previous what-if comments to keep the PR clean.
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            for (const comment of comments.data) {
+              if (comment.body.includes('Sovereign Landing Zone What-If Results') &&
+                  comment.body.includes('deploy-sovereign-lz workflow')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id
+                });
+              }
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+  # --------------------------------------------------------------------------
+  # DEPLOY -- apply changes to the target subscription
+  # --------------------------------------------------------------------------
+  deploy:
+    name: Deploy
+    needs: [validate, what-if]
+    # always() lets deploy run even when what-if fails (informational only).
+    # Validate must succeed, and the trigger must be a push to main or a
+    # non-dry-run workflow_dispatch.
+    if: >-
+      always() &&
+      needs.validate.result == 'success' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'false')
+      )
+    runs-on: ubuntu-latest
+    environment: sovereign-production
+    concurrency:
+      group: sovereign-lz-deploy
+      # Never cancel an in-progress sovereign deployment to avoid partial
+      # policy assignments.
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download compiled template
+        uses: actions/download-artifact@v4
+        with:
+          name: bicep-compiled
+          path: dist/
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Determine parameter file
+        id: params
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/${{ github.event.inputs.environment }}.parameters.json"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            PARAMS_FILE="deployments/sovereign-baseline/prod.parameters.json"
+          else
+            PARAMS_FILE="deployments/sovereign-baseline/dev.parameters.json"
+          fi
+          echo "file=$PARAMS_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy sovereign landing zone
+        # Sovereign cloud modules deployed by this template:
+        #   - modules/sovereign/policy/sovereign-policy-initiative.bicep
+        #   - modules/sovereign/encryption/sovereign-keyvault-cmk.bicep
+        #   - modules/sovereign/encryption/sovereign-tls-enforcement.bicep
+        #   - modules/sovereign/confidential-compute/sovereign-confidential-vm.bicep
+        #   - modules/sovereign/confidential-compute/sovereign-confidential-aks-nodepool.bicep
+        #   - modules/sovereign/hybrid-arc/sovereign-arc-governance.bicep
+        #   - modules/sovereign/identity/sovereign-rbac-assignments.bicep
+        run: |
+          az deployment sub create \
+            --location "${{ env.DEPLOYMENT_LOCATION }}" \
+            --name "${{ env.DEPLOYMENT_NAME }}" \
+            --template-file dist/sovereign-lz.json \
+            --parameters @${{ steps.params.outputs.file }}
