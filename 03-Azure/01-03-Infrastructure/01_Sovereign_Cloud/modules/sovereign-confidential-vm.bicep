@@ -140,6 +140,33 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   }
 }
 
+// Guest Attestation extension — validates TEE integrity via Azure Attestation
+resource guestAttestationExtension 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = if (attestationProviderUri != '') {
+  parent: confidentialVm
+  name: 'GuestAttestation'
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.Security.LinuxAttestation'
+    type: 'GuestAttestation'
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+    settings: {
+      AttestationConfig: {
+        MaaSettings: {
+          maaEndpoint: attestationProviderUri
+          maaTenantName: 'GuestAttestation'
+        }
+        AscSettings: {
+          ascReportingEndpoint: ''
+          ascReportingFrequency: ''
+        }
+        useCustomToken: 'false'
+        disableAlerts: 'false'
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
@@ -147,4 +174,3 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 output vmId string = confidentialVm.id
 output vmName string = confidentialVm.name
 output vmPrincipalId string = confidentialVm.identity.principalId
-output attestationProviderUri string = attestationProviderUri
