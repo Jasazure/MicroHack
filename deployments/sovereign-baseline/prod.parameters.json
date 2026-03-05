@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "westeurope"
+    },
+    "environment": {
+      "value": "prod"
+    },
+    "allowedLocations": {
+      "value": [
+        "westeurope",
+        "northeurope",
+        "germanywestcentral",
+        "norwayeast"
+      ]
+    },
+    "policyEnforcementMode": {
+      "value": "Default"
+    },
+    "minimumTlsVersion": {
+      "value": "TLS1_2"
+    },
+    "sovereignOpsGroupObjectId": {
+      "value": "00000000-0000-0000-0000-000000000000"
+    },
+    "keyVaultName": {
+      "value": "kv-sovereign-prod"
+    },
+    "deployConfidentialVm": {
+      "value": false
+    },
+    "deployConfidentialAksNodePool": {
+      "value": false
+    }
+  }
+}
